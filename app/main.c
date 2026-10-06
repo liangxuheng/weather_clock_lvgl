@@ -13,6 +13,12 @@
 #include "delay.h"
 #include "cmd_queue.h"
 #include "main_loop.h"
+#include "ui.h"
+#include "welcome_page.h"
+#include "wifi.h"
+#include "wifi_page.h"
+#include "error_page.h"
+#include "flex_key.h"
 
 #define WIFI_NAME "your_wifi_ssid"       /**< WiFi SSID */
 #define WIFI_PASSWORD "your_wifi_password" /**< WiFi密码 */
