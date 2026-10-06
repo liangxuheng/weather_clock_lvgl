@@ -13,6 +13,7 @@
 #include "timer.h"
 #include "dht11.h"
 #include "weather.h"
+#include "app_ctx.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "timers.h"
@@ -35,9 +36,9 @@
 #define OUTDOOR_UPDATE_INTERVAL     MINUTES(1) /**< 室外天气刷新间隔：1分钟 */
 
 
-struct lcd24;
-typedef struct lcd24* lcd24_handler;
-
+/* main.c 经 main_loop_init 传入的 ctx；本文件内部刷新回调均为无参定时器回调，
+   故用模块私有指针持有，不再直接 extern 全局句柄 */
+static weather_app_t *g_loop_app = NULL;
 
 static TimerHandle_t timer_sync_handler=NULL;
 static TimerHandle_t timer_wifi_updata_handler=NULL;
@@ -46,12 +47,6 @@ static TimerHandle_t timer_inner_update_handler=NULL;
 static TimerHandle_t timer_outdoor_update_handler=NULL;
 
 static SemaphoreHandle_t semaphore_time_update;
-
-extern lcd24_handler lcd241;
-extern dth_handle dht11_1_handler;
-extern esp32c3_handler esp32c3_1;
-extern rtc_handler rtc_handler_1;
-extern weather_handler weather_1;
 
 static void main_loop_time_sync(void);
 static void main_loop_wifi_update(void);
@@ -110,13 +105,15 @@ static void time_update_task(void*p)
 
 /**
  * @brief  主循环初始化：RTC/DHT11/页面/定时器/工作队列
+ * @param  app  应用上下文（main.c 填充好的句柄集合）
  * @retval None
  */
-void main_loop_init(void)
+void main_loop_init(weather_app_t *app)
 {
+	g_loop_app = app;
 	rtc_init();
-	dht11_init(dht11_1_handler);
-	main_page_show(lcd241,esp32c3_1);
+	dht11_init(g_loop_app->dht);
+	main_page_show(g_loop_app->lcd,g_loop_app->esp);
 	semaphore_time_update=xSemaphoreCreateBinary();
 	timer_sync_handler=xTimerCreate("timer_sync",pdMS_TO_TICKS(1),pdFALSE,
 	(void*)main_loop_time_sync,os_timer_callback_func);
@@ -148,27 +145,27 @@ static void main_loop_time_sync(void)
 {
 	uint64_t timer_sync_delay=TIME_SYNC_INTERVAL;
 	uint16_t year;
-	if(!esp_sntp_get_time(esp32c3_1))
+	if(!esp_sntp_get_time(g_loop_app->esp))
 	{
 		printf("[SNTP] sntp get time failed\r\n");
 		timer_sync_delay=SECONDS(1);
 		goto err;
 	}
-	year=esp_get_time_year(esp32c3_1);
+	year=esp_get_time_year(g_loop_app->esp);
 	if(year<2000)
 	{
 		printf("[SNTP] sntp year failed\r\n");
 		timer_sync_delay=SECONDS(1);
 		goto err;
 	}
-	rtc_handler_1->year=year;
-	rtc_handler_1->month=esp_get_time_month(esp32c3_1);
-	rtc_handler_1->day=esp_get_time_day(esp32c3_1);
-	rtc_handler_1->hour=esp_get_time_hour(esp32c3_1);
-	rtc_handler_1->minute=esp_get_time_minute(esp32c3_1);
-	rtc_handler_1->second=esp_get_time_second(esp32c3_1);
-	rtc_handler_1->weekday=esp_get_time_weekday(esp32c3_1);
-	rtc_set_time(rtc_handler_1);
+	g_loop_app->rtc->year=year;
+	g_loop_app->rtc->month=esp_get_time_month(g_loop_app->esp);
+	g_loop_app->rtc->day=esp_get_time_day(g_loop_app->esp);
+	g_loop_app->rtc->hour=esp_get_time_hour(g_loop_app->esp);
+	g_loop_app->rtc->minute=esp_get_time_minute(g_loop_app->esp);
+	g_loop_app->rtc->second=esp_get_time_second(g_loop_app->esp);
+	g_loop_app->rtc->weekday=esp_get_time_weekday(g_loop_app->esp);
+	rtc_set_time(g_loop_app->rtc);
 	err:
 	xTimerChangePeriod(timer_sync_handler,timer_sync_delay,0);
 }
@@ -181,20 +178,20 @@ static void main_loop_wifi_update(void)
 {
 	static struct esp_wifi_info esp_last_wifi_info={0};
 	xTimerChangePeriod(timer_wifi_updata_handler,WIFI_UPDATE_INTERVAL,0);
-	if(!esp_at_get_wifi_info(esp32c3_1)||\
-		!esp_get_wifi_connected(esp32c3_1))
+	if(!esp_at_get_wifi_info(g_loop_app->esp)||\
+		!esp_get_wifi_connected(g_loop_app->esp))
 	{
 		printf("[WIFI] wifi connect failed\r\n");
 		esp_last_wifi_info.ssid="wifi lost";
-		main_page_redraw_wifi_ssid(lcd241,esp_last_wifi_info.ssid);
+		main_page_redraw_wifi_ssid(g_loop_app->lcd,esp_last_wifi_info.ssid);
 		return;
 	}
-	const char* ssid=esp_get_wifi_ssid(esp32c3_1);
+	const char* ssid=esp_get_wifi_ssid(g_loop_app->esp);
 	if(!ssid)
 	{
 		printf("[WIFI] wifi get ssid failed\r\n");
 		esp_last_wifi_info.ssid="wifi lost";
-		main_page_redraw_wifi_ssid(lcd241,esp_last_wifi_info.ssid);
+		main_page_redraw_wifi_ssid(g_loop_app->lcd,esp_last_wifi_info.ssid);
 		return;
 	}
 	if(strcmp(ssid,esp_last_wifi_info.ssid)==0)
@@ -202,9 +199,9 @@ static void main_loop_wifi_update(void)
 		return;
 	}
 	memcpy(&esp_last_wifi_info,
-	esp32c3_1->esp_wifi_info_pointer,
+	g_loop_app->esp->esp_wifi_info_pointer,
 	sizeof(struct esp_wifi_info));
-	main_page_redraw_wifi_ssid(lcd241,ssid);
+	main_page_redraw_wifi_ssid(g_loop_app->lcd,ssid);
 }
 
 /**
@@ -215,20 +212,20 @@ static void main_loop_time_update(void)
 {
 	static struct rtc_struct rtc_last_info={0};
 	xTimerChangePeriod(timer_time_update_handler,TIME_UPDATE_INTERVAL,0);
-	rtc_get_time(rtc_handler_1);
-	if(rtc_handler_1->year<2000)
+	rtc_get_time(g_loop_app->rtc);
+	if(g_loop_app->rtc->year<2000)
 	{
 		printf("[RTC] rtc get time failed\r\n");
 		return;
 	}
-	if(memcmp(&rtc_last_info,rtc_handler_1,\
+	if(memcmp(&rtc_last_info,g_loop_app->rtc,\
 		sizeof(struct rtc_struct))==0)
 		{
 			return;
 		}
-		memcpy(&rtc_last_info,rtc_handler_1,sizeof(struct rtc_struct));
-		main_page_redraw_date(lcd241,rtc_handler_1);
-		main_page_redraw_time(lcd241,rtc_handler_1);
+		memcpy(&rtc_last_info,g_loop_app->rtc,sizeof(struct rtc_struct));
+		main_page_redraw_date(g_loop_app->lcd,g_loop_app->rtc);
+		main_page_redraw_time(g_loop_app->lcd,g_loop_app->rtc);
 }
 
 /**
@@ -240,19 +237,19 @@ static void main_loop_inner_update(void)
 	static uint8_t recv_last_buf[5]={0};
 	xTimerChangePeriod(timer_inner_update_handler,INNER_UPDATE_INTERVAL,0);
 	uint8_t recv_buf[5]={0};
-	if(!dht11_data_read(dht11_1_handler,recv_buf,sizeof(recv_buf)))
+	if(!dht11_data_read(g_loop_app->dht,recv_buf,sizeof(recv_buf)))
 	{
 		printf("[INNER] inner get failed\r\n");
 		return;
 	}
 	if(recv_buf[2]!=recv_last_buf[2])
 	{
-		main_page_redraw_inner_temperature(lcd241,(float)recv_buf[2]);
+		main_page_redraw_inner_temperature(g_loop_app->lcd,(float)recv_buf[2]);
 		recv_last_buf[2]=recv_buf[2];
 	}
 	if(recv_buf[0]!=recv_last_buf[0])
 	{
-		main_page_redraw_inner_humidity(lcd241,(float)recv_buf[0]);
+		main_page_redraw_inner_humidity(g_loop_app->lcd,(float)recv_buf[0]);
 		recv_last_buf[0]=recv_buf[0];
 	}
 
@@ -268,21 +265,21 @@ static void main_loop_outdoor_update(void)
 	static int last_code=-1;
 	static float last_temperature=-1.0f;
 	xTimerChangePeriod(timer_outdoor_update_handler,OUTDOOR_UPDATE_INTERVAL,0);
-	if(!esp_http_get(esp32c3_1,WEATHER_URL))
+	if(!esp_http_get(g_loop_app->esp,WEATHER_URL))
 	{
 		printf("[outdoor] outdoor get weather failed\r\n");
 		return;
 	}
-	if(!get_weather(esp32c3_1,weather_1))
+	if(!get_weather(g_loop_app->esp,g_loop_app->weather))
 	{
 		printf("[outdoor] outdoor parse weather failed\r\n");
 		return;
 	}
 	char*city=NULL;
-	city=(char*)get_weather_city(weather_1);
-	int code=get_weather_code(weather_1);
+	city=(char*)get_weather_city(g_loop_app->weather);
+	int code=get_weather_code(g_loop_app->weather);
 	float temperature=-1.0f;
-	temperature=get_weather_temperature(weather_1);
+	temperature=get_weather_temperature(g_loop_app->weather);
 	if(city==NULL||temperature==-1.0f)
 	{
 		printf("[ourdoor] outdoor weather error\r\n");
@@ -290,17 +287,17 @@ static void main_loop_outdoor_update(void)
 	}
 	if(strcmp(city,last_city))
 	{
-		main_page_redraw_outdoor_city(lcd241,city);
+		main_page_redraw_outdoor_city(g_loop_app->lcd,city);
 		strcpy(last_city,city);
 	}
 	if(code!=last_code)
 	{
-		main_page_redraw_outdoor_weather_icon(lcd241,code);
+		main_page_redraw_outdoor_weather_icon(g_loop_app->lcd,code);
 		last_code=code;
 	}
 	if(temperature!=last_temperature)
 	{
-		main_page_redraw_outdoor_temperature(lcd241,temperature);
+		main_page_redraw_outdoor_temperature(g_loop_app->lcd,temperature);
 		last_temperature=temperature;
 	}
 }

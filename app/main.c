@@ -19,6 +19,7 @@
 #include "wifi_page.h"
 #include "error_page.h"
 #include "flex_key.h"
+#include "app_ctx.h"
 
 #define WIFI_NAME "your_wifi_ssid"       /**< WiFi SSID */
 #define WIFI_PASSWORD "your_wifi_password" /**< WiFi密码 */
@@ -26,6 +27,9 @@
 
 extern SemaphoreHandle_t wait_for_reconnect;
 extern TaskHandle_t task_flex_button_handle;
+
+/* 应用上下文：board_init() 后填充一次，业务模块通过它拿句柄 */
+static weather_app_t g_app;
 
 /**
  * @brief  按键回调：按键释放时触发WiFi重连
@@ -120,13 +124,20 @@ static void init_task(void *args)
 #endif
 
     wifi_app_connect();
-    main_loop_init();
+    main_loop_init(&g_app);
     vTaskDelete(NULL);
 }
 
 int main(void)
 {
     board_init();
+    /* 一次性打包句柄到 ctx（board.h 只做前向声明，此处句柄来自各模块全局定义） */
+    g_app.lcd     = lcd241;
+    g_app.esp     = esp32c3_1;
+    g_app.rtc     = rtc_handler_1;
+    g_app.weather = weather_1;
+    g_app.dht     = dht11_1_handler;
+    g_app.key     = flex_handler_1;
     xTaskCreate(init_task, "init_task", configMINIMAL_STACK_SIZE * 2,
         NULL, tskIDLE_PRIORITY + 3, NULL);
     vTaskStartScheduler();

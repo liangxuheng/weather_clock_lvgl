@@ -1,5 +1,6 @@
 #ifndef __MAIN_LOOP_H_
 #define __MAIN_LOOP_H_
-void main_loop_init(void);
+#include "app_ctx.h"
+void main_loop_init(weather_app_t *app);
 void main_loop(void);
 #endif
