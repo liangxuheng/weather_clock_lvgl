@@ -5,7 +5,7 @@
 ## 硬件平台
 
 - MCU: STM32F407VET6
-- 屏幕: 2.4" TFT (SPI, ILI9341)
+- 屏幕: 2.4" TFT (SPI, ST7789)
 - WiFi: ESP32-C3 (AT 指令)
 - 温湿度: DHT11
 - RTC: 内部 RTC
